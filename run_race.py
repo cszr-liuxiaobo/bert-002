@@ -458,6 +458,12 @@ def main():
                                          labels=label_ids)
                     loss = result['loss']
                     logits = result['logits']
+                    #######
+                    compare = np.array(label_ids.cpu()) == np.array(logits.argmax(axis=1).cpu())
+                    count += np.sum(compare)
+                    print("\nLabel: {}, Prediction: {}, Accuracy: {}"
+                          .format(label_ids, logits.argmax(axis=1), count / (args.train_batch_size * (step + 1))))
+                    #######
                 if n_gpu > 1:
                     loss = loss.mean()
                 if args.gradient_accumulation_steps > 1:
@@ -466,12 +472,7 @@ def main():
                 nb_tr_examples += input_ids.size(0)
                 nb_tr_steps += 1
                 loss.backward()
-                #######
-                compare = np.array(label_ids.cpu()) == np.array(logits.argmax(axis=1).cpu())
-                count += np.sum(compare)
-                print("\nLabel: {}, Prediction: {}, Accuracy: {}"
-                      .format(label_ids, logits.argmax(axis=1), count / (args.train_batch_size * (step + 1))))
-                #######
+
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     # modify learning rate with special warm up BERT uses
                     lr_this_step = args.learning_rate * warmup_linear(global_step/t_total, args.warmup_proportion)
@@ -574,7 +575,7 @@ def main():
         # Run prediction for full data
         eval_sampler = SequentialSampler(eval_data)
         eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
-
+        #
         model.eval()
         high_eval_loss, high_eval_accuracy = 0, 0
         high_nb_eval_steps, high_nb_eval_examples = 0, 0
@@ -592,7 +593,7 @@ def main():
                                    labels=label_ids)
                     tmp_eval_loss = result['loss']
                     logits = result['logits']
-                    logits = logits.argmax(axis=1)
+                    # logits = logits.argmax(axis=1)
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.to('cpu').numpy()
             tmp_eval_accuracy = accuracy(logits, label_ids)
@@ -640,8 +641,17 @@ def main():
             input_ids, input_mask, segment_ids, label_ids = batch
 
             with torch.no_grad():
-                tmp_eval_loss = model(input_ids, segment_ids, input_mask, label_ids)
-                logits = model(input_ids, segment_ids, input_mask)
+                if args.bert_type == 0:
+                    results = model(input_ids=input_ids,
+                                          token_type_ids=segment_ids,
+                                          attention_mask=input_mask,
+                                          labels=label_ids)
+                elif args.bert_type == 1:
+                    results = model(input_ids=input_ids,
+                                   attention_mask=input_mask,
+                                   labels=label_ids)
+            tmp_eval_loss = results['loss']
+            logits = results['logits']
 
             logits = logits.detach().cpu().numpy()
             label_ids = label_ids.to('cpu').numpy()
@@ -658,13 +668,14 @@ def main():
 
         result = {'middle_eval_loss': eval_loss,
                   'middle_eval_accuracy': eval_accuracy}
+        output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
 
         with open(output_eval_file, "a+") as writer:
             for key in sorted(result.keys()):
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
 
-        ## all test
+        # all test
         eval_loss = (middle_eval_loss + high_eval_loss) / (middle_nb_eval_steps + high_nb_eval_steps)
         eval_accuracy = (middle_eval_accuracy + high_eval_accuracy) / (middle_nb_eval_examples + high_nb_eval_examples)
 
